@@ -72,6 +72,19 @@ public final class NetworkServer extends Thread implements NetworkListener {
     }
   }
 
+  private void saveMessage(String message) {
+    // add message to queue
+    Utils.msgLogger(Utils.LogType.INFO, "RCVD: " + message);
+    synchronized (QUEUE) {
+      try {
+        QUEUE.put(message);
+        QUEUE.notifyAll();
+      } catch (InterruptedException ex) {
+        // ignore
+      }
+    }
+  }
+  
   /**
    * this is the callback to run when exiting
    */
@@ -117,15 +130,7 @@ public final class NetworkServer extends Thread implements NetworkListener {
         // read input from client and add to buffer
         String message = inFromClient.readLine();
         if (message != null) {
-          // add message to queue
-          synchronized (QUEUE) {
-            try {
-              QUEUE.put(message);
-              QUEUE.notifyAll();
-            } catch (InterruptedException ex) {
-              // ignore
-            }
-          }
+          saveMessage(message);
         } else {
           // client disconnected - close the socket so a new connection can be made
           connectionSocket.shutdownInput();
@@ -160,5 +165,4 @@ public final class NetworkServer extends Thread implements NetworkListener {
     }
   }
 
- 
 }
