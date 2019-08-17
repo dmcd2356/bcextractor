@@ -21,21 +21,17 @@ import util.Utils;
  */
 public class BCExtractor {
 
-  // relative path location to output files (all are relative to the project path)
-  private static final String OUTPUT_FOLDER = "danlauncher/";
-  private static final String CLASSFILE_STORAGE = OUTPUT_FOLDER + "classes/";
-  private static final String JAVAPFILE_STORAGE = OUTPUT_FOLDER + "javap/";
-  private static final String LOGFILE_FOLDER    = OUTPUT_FOLDER + ".bcextractor/";
-
   private static NetworkServer  netServer;
   private static Visitor        makeConnection;
+  private static File           jarFile;
   private static String         clientPort;
   private static String         projectName;
   private static String         projectPathName;
-  private static File           jarFile = null;
   private static String         className;
   private static String         methName;
-  private static MessageInfo    msginfo;
+  private static String         classFolder;        // relative path to store class files
+  private static String         javapFolder;        // relative path to store javaps files
+  private static String         logfileFolder;      // relative path to store log file
   
   // allow ServerThread to indicate on panel when a connection has been made for TCP
   public interface Visitor {
@@ -48,6 +44,7 @@ public class BCExtractor {
    */
   public static void main(String[] args) {
     // read arg list and process
+    jarFile = null;
     int port = 6000;
     if (args.length > 0) {
       try {
@@ -74,50 +71,56 @@ public class BCExtractor {
     public void run() {
       while (true) {
         String message = netServer.getNextMessage();
-        int status = parseInput(message);
-        if (status > 0) {
-          // run javap to generate the bytecode source and save output in file
-          String content = generateJavapFile(jarFile, className  + ".class");
-          if (content == null) {
-            System.exit(1);
-          }
-          String fname = projectPathName + JAVAPFILE_STORAGE + className + ".txt";
-          Utils.saveTextFile(fname, content);
-        }
+        parseInput(message);
       }
     }
 
   }
 
-  public class MessageInfo {
-    public String path;
-    public String jar;
-    public String className;
-    public String methName;
-  }
-  
   private static int parseInput(String message) {
     // parse input
     message = message.trim();
     
     // check for execute command
-    if (message.equals("get_bytecode")) {
+    if (message.equals("GET_BYTECODE")) {
       if (jarFile == null || className == null) {
         Utils.msgLogger(Utils.LogType.ERROR, "parseInput: incomplete or invalid settings");
         return 0;
+      }
+
+      // run javap to generate the bytecode source and save output in file
+      String content = generateJavapFile(className  + ".class");
+      if (content != null) {
+        String fname = projectPathName + javapFolder + className + ".txt";
+        Utils.saveTextFile(fname, content);
       }
       return 1;
     }
     
     // else parse the command
-    int offset = message.indexOf(" ");
+    int offset = message.indexOf(":");
     if (offset <= 0) {
       Utils.msgLogger(Utils.LogType.ERROR, "parseInput: Invalid entry received: " + message);
     } else {
-      String key   = message.substring(0, offset);
+      String key   = message.substring(0, offset).trim();
       String value = message.substring(offset + 1).trim();
       switch (key) {
-        case "jar:":
+        case "PATHLOG":
+          logfileFolder = value;
+          break;
+        case "PATHCLASS":
+          classFolder = value;
+          break;
+        case "PATHJAVAP":
+          javapFolder = value;
+          break;
+        case "CLASS":
+          className = value;
+          break;
+        case "METHOD":
+          methName = value;
+          break;
+        case "JAR":
           // check for valid jar file
           jarFile = new File(value);
           Utils.msgLogger(Utils.LogType.INFO, "parser: <jarFile> = " + value);
@@ -130,7 +133,7 @@ public class BCExtractor {
           }
 
           // setup the message logger file
-          String logpathname = projectPathName + LOGFILE_FOLDER;
+          String logpathname = projectPathName + logfileFolder;
           File logpath = new File(logpathname);
           String logfile = logpathname + "commands.log";
           if (logpath.isDirectory()) {
@@ -141,12 +144,6 @@ public class BCExtractor {
           Utils.msgLoggerInit(logfile, "message logger started for BCExtractor");
           Utils.msgLogger(Utils.LogType.INFO, "processing jar file: " + projectName);
           Utils.msgLogger(Utils.LogType.INFO, "projectPathName: " + projectPathName);
-          break;
-        case "class:":
-          className = value;
-          break;
-        case "method:":
-          methName = value;
           break;
         default:
           Utils.msgLogger(Utils.LogType.ERROR, "parseInput: Invalid key received: " + key);
@@ -180,19 +177,24 @@ public class BCExtractor {
     }
   }
   
-  private static String generateJavapFile(File jarfile, String classSelect) {
+  private static String generateJavapFile(String classSelect) {
+    if (!jarFile.isFile()) {
+      System.err.println("jar file not found - " + jarFile.getAbsolutePath());
+      return null;
+    }
+    
     // add the suffix
     Utils.msgLogger(Utils.LogType.INFO, "generateJavapFile: processing Bytecode for: " + classSelect);
     
-    // if we don't already have the class file, extract itfrom the jar file
-    String clsname = projectPathName + CLASSFILE_STORAGE + classSelect;
+    // if we don't already have the class file, extract it from the jar file
+    String clsname = projectPathName + classFolder + classSelect;
     File classFile = new File(clsname);
     if (classFile.isFile()) {
       Utils.msgLogger(Utils.LogType.INFO, "generateJavapFile: " + classSelect + " already exists");
     } else {
       try {
         // extract the selected class file
-        int rc = extractClassFile(jarfile, classSelect);
+        int rc = extractClassFile(classSelect);
         if (rc != 0) {
           return null;
         }
@@ -220,7 +222,12 @@ public class BCExtractor {
     return content;
   }
 
-  private static int extractClassFile(File jarfile, String classSelect) throws IOException {
+  private static int extractClassFile(String classSelect) throws IOException {
+    if (!jarFile.isFile()) {
+      System.err.println("jar file not found - " + jarFile.getAbsolutePath());
+      return -1;
+    }
+    
     // get the path relative to the application directory
     int offset;
     String relpathname = "";
@@ -232,14 +239,7 @@ public class BCExtractor {
     
     Utils.msgLogger(Utils.LogType.INFO, "extractClassFile: '" + classSelect + "' from " + relpathname);
     
-    // get the location of the jar file (where we will extract the class files to)
-    String jarpathname = jarfile.getAbsolutePath();
-    offset = jarpathname.lastIndexOf('/');
-    if (offset > 0) {
-      jarpathname = jarpathname.substring(0, offset + 1);
-    }
-    
-    JarFile jar = new JarFile(jarfile.getAbsoluteFile());
+    JarFile jar = new JarFile(jarFile.getAbsoluteFile());
     Enumeration enumEntries = jar.entries();
 
     // look for specified class file in the jar
@@ -248,7 +248,7 @@ public class BCExtractor {
       String fullname = file.getName();
 
       if (fullname.equals(relpathname + classSelect)) {
-        String fullpath = jarpathname + CLASSFILE_STORAGE + relpathname;
+        String fullpath = projectPathName + classFolder + relpathname;
         File fout = new File(fullpath + classSelect);
         // skip if file already exists
         if (fout.isFile()) {
