@@ -12,6 +12,8 @@ import java.io.InputStream;
 import java.util.Enumeration;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import org.apache.commons.io.FileUtils;
+
 import util.CommandLauncher;
 import util.Utils;
 
@@ -21,6 +23,12 @@ import util.Utils;
  */
 public class BCExtractor {
 
+  // set the default location of where to store the output files (relative to the jar file)
+  private static final String   OUTPUT_FOLDER = "bcextractor/"; // all output goes under this subdir
+  private static final String   LOG_FOLDER = OUTPUT_FOLDER;              // log file storage
+  private static final String   CLASS_FOLDER  = OUTPUT_FOLDER + "classes/"; // class file storage
+  private static final String   JAVAP_FOLDER  = OUTPUT_FOLDER + "javap/";   // javap file storage
+  
   private static NetworkServer  netServer;
   private static Visitor        makeConnection;
   private static File           jarFile;
@@ -29,10 +37,7 @@ public class BCExtractor {
   private static String         projectPathName;
   private static String         className;
   private static String         methName;
-  private static String         classFolder;        // relative path to store class files
-  private static String         javapFolder;        // relative path to store javaps files
-  private static String         logfileFolder;      // relative path to store log file
-  
+
   // allow ServerThread to indicate on panel when a connection has been made for TCP
   public interface Visitor {
     void showConnection(String connection);
@@ -44,7 +49,6 @@ public class BCExtractor {
    */
   public static void main(String[] args) {
     // read arg list and process
-    jarFile = null;
     int port = 6000;
     if (args.length > 0) {
       try {
@@ -64,6 +68,10 @@ public class BCExtractor {
   
   private static class ParserThread extends Thread {
     
+    ParserThread() {
+      jarFile = null;
+    }
+    
     /**
      * the run process for solving the constraints in the database
      */
@@ -81,8 +89,18 @@ public class BCExtractor {
     // parse input
     message = message.trim();
     
-    // check for execute command
-    if (message.equals("GET_BYTECODE")) {
+    // check for execute commands
+    if (message.equals("CLEAR")) {
+      // clear out all old class and javap files
+      Utils.printStatusInfo("Removing existing class and javap output files");
+      try {
+        FileUtils.deleteDirectory(new File(projectPathName + CLASS_FOLDER));
+        FileUtils.deleteDirectory(new File(projectPathName + JAVAP_FOLDER));
+      } catch (IOException ex) {
+        Utils.printStatusError(ex.getMessage());
+      }
+      return 0;
+    } else if (message.equals("GET_BYTECODE")) {
       if (jarFile == null || className == null) {
         Utils.msgLogger(Utils.LogType.ERROR, "parseInput: incomplete or invalid settings");
         return 0;
@@ -91,7 +109,7 @@ public class BCExtractor {
       // run javap to generate the bytecode source and save output in file
       String content = generateJavapFile(className  + ".class");
       if (content != null) {
-        String fname = projectPathName + javapFolder + className + ".txt";
+        String fname = projectPathName + JAVAP_FOLDER + className + ".txt";
         Utils.saveTextFile(fname, content);
       }
       return 1;
@@ -105,15 +123,6 @@ public class BCExtractor {
       String key   = message.substring(0, offset).trim();
       String value = message.substring(offset + 1).trim();
       switch (key) {
-        case "PATHLOG":
-          logfileFolder = value;
-          break;
-        case "PATHCLASS":
-          classFolder = value;
-          break;
-        case "PATHJAVAP":
-          javapFolder = value;
-          break;
         case "CLASS":
           className = value;
           break;
@@ -132,10 +141,20 @@ public class BCExtractor {
             jarFile = null;
           }
 
+          // if the javap and class paths do not exist, create them
+          File outPath = new File(projectPathName + CLASS_FOLDER);
+          if (!outPath.isDirectory()) {
+            outPath.mkdirs();
+          }
+          outPath = new File(projectPathName + JAVAP_FOLDER);
+          if (!outPath.isDirectory()) {
+            outPath.mkdirs();
+          }
+    
           // setup the message logger file
-          String logpathname = projectPathName + logfileFolder;
+          String logpathname = projectPathName + LOG_FOLDER;
           File logpath = new File(logpathname);
-          String logfile = logpathname + "commands.log";
+          String logfile = logpathname + "bcextractor.log";
           if (logpath.isDirectory()) {
             new File(logfile).delete();
           } else {
@@ -187,7 +206,7 @@ public class BCExtractor {
     Utils.msgLogger(Utils.LogType.INFO, "generateJavapFile: processing Bytecode for: " + classSelect);
     
     // if we don't already have the class file, extract it from the jar file
-    String clsname = projectPathName + classFolder + classSelect;
+    String clsname = projectPathName + CLASS_FOLDER + classSelect;
     File classFile = new File(clsname);
     if (classFile.isFile()) {
       Utils.msgLogger(Utils.LogType.INFO, "generateJavapFile: " + classSelect + " already exists");
@@ -248,7 +267,7 @@ public class BCExtractor {
       String fullname = file.getName();
 
       if (fullname.equals(relpathname + classSelect)) {
-        String fullpath = projectPathName + classFolder + relpathname;
+        String fullpath = projectPathName + CLASS_FOLDER + relpathname;
         File fout = new File(fullpath + classSelect);
         // skip if file already exists
         if (fout.isFile()) {
